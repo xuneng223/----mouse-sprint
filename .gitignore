@@ -1,0 +1,59 @@
+# Python生成的文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Nuitka编译输出
+*.build/
+*.dist/
+*.onefile-build/
+
+# conda环境
+.conda/
+mouse_sprint/
+
+# 构建输出目录
+build/
+nuitka_build/
+py310_build/
+dist/
+*.spec
+
+# 虚拟环境
+.env/
+.env310/
+venv/
+ENV/
+
+# 热键配置文件（可能包含个人设置）
+hotkeys.json
+
+# 编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Windows特定文件
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk 
