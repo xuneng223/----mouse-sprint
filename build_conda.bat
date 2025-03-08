@@ -80,4 +80,11 @@ if exist "%OUTPUT_DIR%\mouse_spirit.exe" (
     echo 请查看 "%OUTPUT_DIR%" 目录中的文件。
 )
 
+echo 清理构建目录...
+if exist "mouse_spirit.build" rd /s /q "mouse_spirit.build"
+if exist "mouse_spirit.onefile-build" rd /s /q "mouse_spirit.onefile-build"
+if exist "mouse_spirit.dist" rd /s /q "mouse_spirit.dist"
+if exist "__pycache__" rd /s /q "__pycache__"
+if exist "%OUTPUT_DIR%" rd /s /q "%OUTPUT_DIR%"
+
 pause 

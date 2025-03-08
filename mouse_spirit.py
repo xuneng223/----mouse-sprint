@@ -11,6 +11,7 @@ import math
 # 尝试导入pynput，如果失败则使用备用方案
 try:
     from pynput import mouse
+    from pynput import keyboard
     from pynput.keyboard import Key, KeyCode
     PYNPUT_AVAILABLE = True
 except (ImportError, TypeError, AttributeError) as e:
@@ -48,6 +49,13 @@ class MouseSpirit:
         self.mouse_precision = tk.IntVar(value=200)
         self.optimize_path = tk.BooleanVar(value=False)
         self.record_keyboard = tk.BooleanVar(value=True)
+        
+        # 用于跟踪组合键的变量
+        self.active_modifiers = set()
+        self.modifier_keys = {
+            'ctrl', 'alt', 'shift', 'cmd', 'command', 
+            'win', 'meta', 'super', 'option', 'control'
+        }
         
         # 热键设置 - 使用键名，而不是键对象
         self.hotkeys = {
@@ -142,20 +150,33 @@ class MouseSpirit:
 
     def on_closing(self):
         """处理窗口关闭事件，确保监听器正确停止"""
-        # 停止所有活动
-        if self.is_recording:
-            self.stop_recording()
-        if self.is_playing:
-            self.stop_playback()
-        
-        # 停止备用鼠标跟踪
-        self.mouse_track_running = False
-        
-        # 停止所有监听器
-        self.stop_all_listeners()
-        
-        # 关闭窗口
-        self.root.destroy()
+        try:
+            # 添加确认对话框，防止误触发
+            if self.is_recording or self.is_playing:
+                if not messagebox.askyesno("确认退出", "当前正在录制或播放，确定要退出吗？"):
+                    return
+            
+            # 停止所有活动
+            if self.is_recording:
+                self.stop_recording()
+            if self.is_playing:
+                self.stop_playback()
+            
+            # 停止备用鼠标跟踪
+            self.mouse_track_running = False
+            
+            # 停止所有监听器
+            self.stop_all_listeners()
+            
+            # 关闭窗口
+            self.root.destroy()
+        except Exception as e:
+            print(f"关闭程序时出错: {e}")
+            # 确保程序能正确退出
+            try:
+                self.root.destroy()
+            except:
+                pass
     
     def stop_all_listeners(self):
         """安全地停止所有监听器"""
@@ -590,12 +611,21 @@ class MouseSpirit:
             """判断是否需要记录该点"""
             nonlocal last_x, last_y, last_record_time, last_move_time
             
+            # 防止传入None值
+            if x is None or y is None or current_time is None:
+                return False
+                
             if last_x is None or last_y is None:
                 return True  # 记录起点
                 
             # 计算移动距离
-            distance = ((x - last_x) ** 2 + (y - last_y) ** 2) ** 0.5
-            min_distance = self.mouse_precision.get() / 5  # 最小移动距离
+            try:
+                distance = ((x - last_x) ** 2 + (y - last_y) ** 2) ** 0.5
+                min_distance = max(1, self.mouse_precision.get() / 5)  # 最小移动距离，确保至少为1像素
+            except (TypeError, ValueError):
+                print("计算距离出错，使用默认值")
+                distance = 0
+                min_distance = 5
             
             if not self.optimize_path.get():
                 # 不优化路径时，按照精度记录点
@@ -606,17 +636,24 @@ class MouseSpirit:
                 last_move_time = current_time
             
             # 检查是否停留超过1秒
-            if distance < min_distance and (current_time - last_move_time) > 1.0:
+            try:
+                if distance < min_distance and (current_time - last_move_time) > 1.0:
+                    last_move_time = current_time
+                    return True
+            except TypeError:
                 last_move_time = current_time
-                return True
             
             # 如果发生移动，更新last_move_time
             if distance > min_distance:
                 last_move_time = current_time
             
             # 只在开始新的移动序列时记录点
-            if last_record_time is None or (current_time - last_record_time) > 0.1:
-                return distance > min_distance
+            try:
+                if last_record_time is None or (current_time - last_record_time) > 0.1:
+                    return distance > min_distance
+            except TypeError:
+                last_record_time = current_time
+                return True
             
             return False
         
@@ -627,62 +664,73 @@ class MouseSpirit:
                 return False
                 
             try:
+                # 防止None值处理
+                if x is None or y is None:
+                    return True
+                    
                 current_time = time.time() - start_time
                 
                 if should_record_point(x, y, current_time):
+                    # 确保值是整数
+                    x_int = int(round(x))
+                    y_int = int(round(y))
+                    
                     self.actions.append({
                         'type': 'move',
-                        'x': x,
-                        'y': y,
+                        'x': x_int,
+                        'y': y_int,
                         'time': current_time
                     })
-                    last_x, last_y = x, y
+                    last_x, last_y = x_int, y_int
                     last_record_time = current_time
                     
                     # 使用after方法安全地更新UI
                     if self.root.winfo_exists():
-                        self.root.after(0, lambda: self.update_log(f"移动到: ({x}, {y})\n"))
+                        self.root.after(0, lambda: self.update_log(f"移动到: ({x_int}, {y_int})\n"))
             except Exception as e:
                 print(f"记录移动时出错: {e}")
                 return False
         
         def on_click(x, y, button, pressed):
-            nonlocal last_x, last_y, last_record_time
             if not self.is_recording:
                 return False
+                
             try:
-                if pressed:
-                    current_time = time.time() - start_time
-                    btn = 'left'
+                # 防止None值处理
+                if x is None or y is None or button is None:
+                    return True
+                    
+                current_time = time.time() - start_time
+                
+                # 转换按钮名称为字符串
+                if button == mouse.Button.left:
+                    button_name = 'left'
+                elif button == mouse.Button.right:
+                    button_name = 'right'
+                elif button == mouse.Button.middle:
+                    button_name = 'middle'
+                else:
+                    # 处理其他可能的按钮
                     try:
-                        if hasattr(button, 'name'):
-                            btn = 'right' if button.name == 'right' else 'left'
-                        elif str(button).endswith('.right'):
-                            btn = 'right'
+                        button_name = button.name
                     except:
-                        pass
-                    
-                    # 点击前确保记录当前位置（如果位置有变化）
-                    if last_x != x or last_y != y:
-                        self.actions.append({
-                            'type': 'move',
-                            'x': x,
-                            'y': y,
-                            'time': current_time - 0.001
-                        })
-                    
-                    self.actions.append({
-                        'type': 'click',
-                        'x': x,
-                        'y': y,
-                        'button': btn,
-                        'time': current_time
-                    })
-                    last_x, last_y = x, y
-                    last_record_time = current_time
-                    # 使用after方法安全地更新UI
-                    if self.root.winfo_exists():
-                        self.root.after(0, lambda: self.update_log(f"点击 {btn}: ({x}, {y})\n"))
+                        button_name = 'left'  # 默认为左键
+                
+                # 确保值是整数
+                x_int = int(round(x))
+                y_int = int(round(y))
+                
+                self.actions.append({
+                    'type': 'click',
+                    'x': x_int,
+                    'y': y_int,
+                    'button': button_name,
+                    'pressed': pressed,
+                    'time': current_time
+                })
+                
+                if self.root.winfo_exists():
+                    self.root.after(0, lambda: self.update_log(f"点击 {button_name}: ({x_int}, {y_int})\n"))
             except Exception as e:
                 print(f"记录点击时出错: {e}")
                 return False
@@ -766,6 +814,10 @@ class MouseSpirit:
                 last_time = 0
                 last_check_time = time.time()
                 
+                # 跟踪当前按下的所有键
+                pressed_keys = set()  # 所有当前按下的键
+                active_modifiers = set()  # 活动修饰键（仅限修饰键）
+                
                 for action in self.actions:
                     if not self.is_playing:
                         break
@@ -783,13 +835,21 @@ class MouseSpirit:
                         last_mouse_pos = current_pos
                         last_check_time = current_real_time
                     
-                    # 计算等待时间
+                    # 优化加速逻辑，使加速效果更明显
                     if speed_factor > 0:
-                        wait_time = (current_time - last_time) / speed_factor
-                        # 对于高速模式，进一步优化
-                        if speed_factor > 1:
-                            wait_time = wait_time / (2 * speed_factor)
-                        # 限制最小等待时间
+                        # 原始等待时间
+                        original_wait = current_time - last_time
+                        
+                        # 新的加速算法，使高速时更明显
+                        if speed_factor <= 1:
+                            # 低速模式 (1-100%)
+                            wait_time = original_wait / speed_factor
+                        else:
+                            # 高速模式 (>100%)
+                            # 使用指数衰减来使高速更明显
+                            wait_time = original_wait / (speed_factor ** 1.5)
+                        
+                        # 限制最小等待时间，避免过快导致无法执行
                         if wait_time > 0.0001:  # 0.1毫秒的最小延迟
                             time.sleep(wait_time)
                     
@@ -804,18 +864,136 @@ class MouseSpirit:
                             pyautogui.click(action['x'], action['y'], button=button)
                             last_mouse_pos = (action['x'], action['y'])
                         elif action['type'] == 'key':
-                            if action['action'] == 'press':
-                                pyautogui.keyDown(action['key'])
-                            elif action['action'] == 'release':
-                                pyautogui.keyUp(action['key'])
+                            key_value = action.get('key')
+                            if key_value is None:
+                                print("警告: 键值为None，跳过此操作")
+                                continue
+                            
+                            # 对空格键的特殊处理
+                            if key_value.lower() in ['blank', 'space', 'spacebar', ' ']:
+                                key_value = 'space'  # 使用PyAutoGUI能识别的名称
+                                print("处理空格键")
+                            
+                            # 处理特殊情况如"ctrl l"（左ctrl）
+                            elif key_value == "ctrl l" or key_value == "ctrl_l":
+                                key_value = "ctrl"
+                            elif key_value == "ctrl r" or key_value == "ctrl_r":
+                                key_value = "ctrl"
+                            elif key_value == "shift l" or key_value == "shift_l":
+                                key_value = "shift"
+                            elif key_value == "shift r" or key_value == "shift_r":
+                                key_value = "shift"
+                            elif key_value == "alt l" or key_value == "alt_l":
+                                key_value = "alt"
+                            elif key_value == "alt r" or key_value == "alt_r":
+                                key_value = "alt"
+                            
+                            # 判断是否是修饰键
+                            is_modifier = key_value.lower() in self.modifier_keys
+                            
+                            # 已有显式的修饰键信息
+                            modifiers = action.get('modifiers', [])
+                            
+                            key_action = action.get('action')
+                            if key_action == 'press':
+                                # 先处理显式的修饰键
+                                for mod in modifiers:
+                                    if mod not in active_modifiers:
+                                        pyautogui.keyDown(mod)
+                                        active_modifiers.add(mod)
+                                        pressed_keys.add(mod)
+                                
+                                # 对于连续按键操作，检查当前是否有修饰键被按下但未释放
+                                # (这处理现有录制的连续按键情况)
+                                for key in pressed_keys:
+                                    if key.lower() in self.modifier_keys:
+                                        active_modifiers.add(key.lower())
+                                
+                                # 按下当前键
+                                print(f"按下键: {key_value}")
+                                if active_modifiers:
+                                    print(f"使用组合键: {'+'.join(active_modifiers)}+{key_value}")
+                                
+                                # 为空格键增加额外重试逻辑
+                                success = False
+                                retry_count = 0
+                                max_retries = 3
+                                
+                                while not success and retry_count < max_retries:
+                                    try:
+                                        pyautogui.keyDown(key_value)
+                                        success = True
+                                    except Exception as e:
+                                        print(f"按键失败: {e}, 重试中... ({retry_count+1}/{max_retries})")
+                                        retry_count += 1
+                                        if key_value == 'space' and retry_count == max_retries - 1:
+                                            # 最后一次尝试用不同的方式发送空格
+                                            print("尝试替代方法发送空格")
+                                            pyautogui.press('space')
+                                            success = True
+                                        time.sleep(0.1)  # 等待一会再重试
+                                
+                                if success:
+                                    pressed_keys.add(key_value)
+                                    # 如果是修饰键，添加到修饰键集合
+                                    if is_modifier:
+                                        active_modifiers.add(key_value.lower())
+                                else:
+                                    print(f"无法按下键: {key_value}")
+                                
+                            elif key_action == 'release':
+                                # 释放当前键
+                                print(f"释放键: {key_value}")
+                                try:
+                                    pyautogui.keyUp(key_value)
+                                except Exception as e:
+                                    print(f"释放键失败: {e}")
+                                    # 对空格键的特殊处理
+                                    if key_value == 'space':
+                                        try:
+                                            # 尝试其他方法释放空格键
+                                            print("尝试替代方法释放空格")
+                                            pyautogui.press('space')
+                                        except:
+                                            pass
+                                
+                                # 从已按下键集合中移除
+                                if key_value in pressed_keys:
+                                    pressed_keys.remove(key_value)
+                                
+                                # 如果是修饰键，从修饰键集合中移除
+                                if key_value.lower() in active_modifiers:
+                                    active_modifiers.remove(key_value.lower())
                     except Exception as e:
                         print(f"执行动作时出错: {e}")
                     
                     last_time = current_time
-                    
-                # 每次执行完一轮后的短暂暂停
+                
+                # 确保所有键都被释放，避免按键卡住
+                for key in list(pressed_keys):
+                    try:
+                        print(f"释放剩余的键: {key}")
+                        pyautogui.keyUp(key)
+                    except Exception as e:
+                        print(f"释放键时出错: {e}")
+                        # 对空格键的特殊处理
+                        if key == 'space':
+                            try:
+                                print("尝试替代方法释放空格")
+                                pyautogui.press('space')
+                            except:
+                                pass
+                pressed_keys.clear()
+                active_modifiers.clear()
+                
+                # 每次执行完一轮后的短暂暂停，根据速度因子调整
                 if i < count - 1:
-                    time.sleep(0.2 / speed_factor)  # 减少轮次间的等待时间
+                    # 优化轮次间的等待时间
+                    if speed_factor <= 1:
+                        pause_time = 0.2 / speed_factor
+                    else:
+                        pause_time = 0.2 / (speed_factor ** 1.5)
+                    time.sleep(max(0.01, pause_time))  # 确保最小暂停时间
                     
         except Exception as e:
             print(f"回放过程出错: {e}")
@@ -866,65 +1044,136 @@ class MouseSpirit:
             messagebox.showerror("错误", f"加载失败: {str(e)}")
 
     def start_keyboard_recording(self):
-        """启动键盘监听"""
-        from pynput import keyboard
-        
-        last_key_time = [0]  # 使用列表以便在闭包中修改
-        
+        """开始录制键盘事件"""
+        if not PYNPUT_AVAILABLE:
+            messagebox.showerror("错误", "无法录制键盘，未安装pynput库")
+            return
+            
+        # 重置活动修饰键集合
+        self.active_modifiers = set()
+            
         def on_press(key):
-            if not self.is_recording:
-                return False
             try:
-                if hasattr(key, 'char'):
-                    key_char = key.char
-                else:
-                    key_char = key.name if hasattr(key, 'name') else str(key)
-                
+                if not self.is_recording:
+                    return False
+                    
+                # 处理key可能是None的情况
+                if key is None:
+                    print("警告: 接收到None键值")
+                    return True
+                    
                 current_time = time.time() - self.record_start_time
                 
-                # 如果是连续的键盘输入，使用相同的时间戳
-                if self.actions and self.actions[-1]['type'] == 'key':
-                    current_time = self.actions[-1]['time']
+                # 处理特殊键和普通键
+                key_str = None
+                try:
+                    # 尝试获取字符
+                    key_str = key.char
+                except AttributeError:
+                    # 特殊键处理
+                    key_str = str(key).replace('Key.', '')
+                    
+                # 确保key_str不为None
+                if key_str is None:
+                    key_str = "unknown"
                 
-                self.actions.append({
+                # 标准化空格键表示
+                if key_str.lower() in ['blank', 'space', 'spacebar', ' ']:
+                    key_str = 'space'
+                    print("记录空格键")
+                
+                # 检查是否是修饰键
+                is_modifier = False
+                key_lower = key_str.lower()
+                if key_lower in self.modifier_keys:
+                    is_modifier = True
+                    self.active_modifiers.add(key_lower)
+                
+                # 创建动作对象，包含修饰键信息
+                action_data = {
                     'type': 'key',
-                    'key': key_char,
+                    'key': key_str,
                     'action': 'press',
-                    'time': current_time
-                })
-                last_key_time[0] = current_time
+                    'time': current_time,
+                    'is_modifier': is_modifier
+                }
                 
-                if self.root.winfo_exists():
-                    self.root.after(0, lambda: self.update_log(f"按下键: {key_char}\n"))
-            except Exception as e:
-                print(f"记录键盘按下时出错: {e}")
-        
-        def on_release(key):
-            if not self.is_recording:
-                return False
-            try:
-                if hasattr(key, 'char'):
-                    key_char = key.char
+                # 如果有活动修饰键且当前按键不是修饰键，记录组合键信息
+                if self.active_modifiers and not is_modifier:
+                    action_data['modifiers'] = list(self.active_modifiers)
+                    # 在UI中显示组合键
+                    combo_str = '+'.join(m.capitalize() for m in self.active_modifiers) + "+" + key_str
+                    if self.root.winfo_exists():
+                        self.root.after(0, lambda: self.update_log(f"组合键: {combo_str}\n"))
                 else:
-                    key_char = key.name if hasattr(key, 'name') else str(key)
+                    # 使用after方法安全地更新UI
+                    if self.root.winfo_exists():
+                        self.root.after(0, lambda: self.update_log(f"按下键: {key_str}\n"))
                 
+                self.actions.append(action_data)
+                return True
+            except Exception as e:
+                print(f"处理按键按下事件出错: {e}")
+                return True
+                
+        def on_release(key):
+            try:
+                if not self.is_recording:
+                    return False
+                    
+                # 处理key可能是None的情况
+                if key is None:
+                    return True
+                    
                 current_time = time.time() - self.record_start_time
-                # 如果与按下时间相近，使用相同的时间戳
-                if abs(current_time - last_key_time[0]) < 0.1:
-                    current_time = last_key_time[0]
+                
+                # 处理特殊键和普通键
+                key_str = None
+                try:
+                    # 尝试获取字符
+                    key_str = key.char
+                except AttributeError:
+                    # 特殊键处理
+                    key_str = str(key).replace('Key.', '')
+                    
+                # 确保key_str不为None
+                if key_str is None:
+                    key_str = "unknown"
+                
+                # 标准化空格键表示
+                if key_str.lower() in ['blank', 'space', 'spacebar', ' ']:
+                    key_str = 'space'
+                
+                # 检查是否是修饰键
+                key_lower = key_str.lower()
+                if key_lower in self.modifier_keys:
+                    # 从活动修饰键集合中移除
+                    self.active_modifiers.discard(key_lower)
                 
                 self.actions.append({
                     'type': 'key',
-                    'key': key_char,
+                    'key': key_str,
                     'action': 'release',
                     'time': current_time
                 })
+                
+                # 使用after方法安全地更新UI
+                if self.root.winfo_exists():
+                    self.root.after(0, lambda: self.update_log(f"释放键: {key_str}\n"))
+                
+                return True
             except Exception as e:
-                print(f"记录键盘释放时出错: {e}")
+                print(f"处理按键释放事件出错: {e}")
+                return True
         
         try:
-            self.keyboard_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-            self.keyboard_listener.start()
+            # 确保正确引用keyboard模块
+            if hasattr(keyboard, 'Listener'):
+                self.keyboard_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+                self.keyboard_listener.daemon = True
+                self.keyboard_listener.start()
+            else:
+                print("警告: keyboard.Listener不可用")
         except Exception as e:
             print(f"启动键盘监听时出错: {e}")
 
@@ -971,35 +1220,72 @@ class MouseSpirit:
             elif action['type'] == 'click':
                 values.extend(['点击', f'{action["button"]}: ({action["x"]}, {action["y"]})', f'{action["time"]:.2f}s'])
             elif action['type'] == 'key':
-                values.extend(['键盘', f'{action["action"]}: {action["key"]}', f'{action["time"]:.2f}s'])
+                # 改进键盘动作显示，添加组合键信息
+                key_desc = action['key']
+                if 'modifiers' in action and action['modifiers']:
+                    mod_str = '+'.join(m.capitalize() for m in action['modifiers'])
+                    key_desc = f"{mod_str}+{key_desc}"
+                values.extend(['键盘', f'{action["action"]}: {key_desc}', f'{action["time"]:.2f}s'])
             
             self.action_tree.insert('', 'end', values=values)
 
     def start_global_hotkeys(self):
-        """启动全局热键监听"""
-        from pynput import keyboard
-        
+        """启动全局热键监听器"""
+        if not PYNPUT_AVAILABLE:
+            return
+            
         def on_press(key):
             try:
-                # 检查是否是热键
-                key_str = key.char if hasattr(key, 'char') else key.name
-                if key_str:
-                    key_str = key_str.upper()
-                    if key_str == self.hotkeys["start_record"]["key"]:
+                # 防止key为None
+                if key is None:
+                    return True
+                    
+                # 获取热键字符串
+                key_str = None
+                try:
+                    # 尝试获取字符
+                    key_str = key.char
+                except AttributeError:
+                    # 特殊键处理
+                    key_str = str(key).replace('Key.', '')
+                
+                # 确保key_str不为None
+                if key_str is None:
+                    return True
+                    
+                # 将key_str转为大写以匹配热键设置
+                key_str = key_str.upper()
+                    
+                # 检查是否匹配录制/播放热键
+                record_hotkey = self.hotkeys.get("start_record", {}).get("key", "F6")
+                play_hotkey = self.hotkeys.get("start_playback", {}).get("key", "F10")
+                
+                if key_str == record_hotkey:
+                    # 在主线程中执行UI操作
+                    if self.root.winfo_exists():
                         self.root.after(0, self.toggle_recording)
-                    elif key_str == self.hotkeys["start_playback"]["key"]:
+                        
+                elif key_str == play_hotkey:
+                    # 在主线程中执行UI操作
+                    if self.root.winfo_exists():
                         self.root.after(0, self.toggle_playback)
-            except:
-                pass
-            return True  # 继续监听
-        
+                
+                return True
+            except Exception as e:
+                print(f"处理全局热键时出错: {e}")
+                return True
+                
+        # 启动监听器
         try:
-            if self.global_hotkey_listener:
-                self.global_hotkey_listener.stop()
-            self.global_hotkey_listener = keyboard.Listener(on_press=on_press)
-            self.global_hotkey_listener.start()
+            # 确保正确引用keyboard模块
+            if hasattr(keyboard, 'Listener'):
+                self.global_hotkey_listener = keyboard.Listener(on_press=on_press)
+                self.global_hotkey_listener.daemon = True
+                self.global_hotkey_listener.start()
+            else:
+                print("警告: keyboard.Listener不可用")
         except Exception as e:
-            print(f"启动全局热键监听时出错: {e}")
+            print(f"启动全局热键监听器时出错: {e}")
 
     def edit_selected_action(self, event=None):
         """编辑选中的动作"""
@@ -1140,17 +1426,35 @@ class MouseSpirit:
             return
             
         MIN_INTERVAL = 0.001  # 最小时间间隔（1毫秒）
+        CLICK_INTERVAL = 0.01  # 点击操作的时间间隔（10毫秒）
+        KEY_INTERVAL = 0.005   # 键盘操作的时间间隔（5毫秒）
+        
         new_time = 0
         last_type = None
         
         for action in self.actions:
-            current_type = action['type']
-            # 如果是连续的键盘输入，不增加延时
-            if current_type == 'key' and last_type == 'key':
-                action['time'] = new_time
-            else:
+            if action is None:
+                continue
+                
+            current_type = action.get('type')
+            if current_type is None:
+                continue
+                
+            # 根据动作类型设置不同的间隔
+            if current_type == 'move':
+                # 移动点增加最小间隔
                 new_time += MIN_INTERVAL
-                action['time'] = new_time
+            elif current_type == 'click':
+                # 点击操作增加更大间隔
+                new_time += CLICK_INTERVAL
+            elif current_type == 'key':
+                # 如果是连续的键盘输入，使用较小间隔
+                if last_type == 'key':
+                    new_time += MIN_INTERVAL
+                else:
+                    new_time += KEY_INTERVAL
+                    
+            action['time'] = new_time
             last_type = current_type
         
         self.refresh_action_display()
